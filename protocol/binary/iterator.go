@@ -2,10 +2,11 @@ package binary
 
 import (
 	"fmt"
-	"github.com/thrift-iterator/go/protocol"
-	"github.com/thrift-iterator/go/spi"
 	"io"
 	"math"
+
+	"github.com/thrift-iterator/go/protocol"
+	"github.com/thrift-iterator/go/spi"
 )
 
 type Iterator struct {
@@ -105,13 +106,34 @@ func (iter *Iterator) Reset(reader io.Reader, buf []byte) {
 
 func (iter *Iterator) ReadMessageHeader() protocol.MessageHeader {
 	versionAndMessageType := iter.ReadInt32()
-	messageType := protocol.TMessageType(versionAndMessageType & 0x0ff)
-	version := int64(int64(versionAndMessageType) & 0xffff0000)
-	if version != protocol.BINARY_VERSION_1 {
-		iter.ReportError("ReadMessageHeader", "unexpected version")
-		return protocol.MessageHeader{}
+
+	var (
+		messageName string
+		messageType protocol.TMessageType
+	)
+
+	if uint32(versionAndMessageType)&protocol.BINARY_LEGACY_MASK != protocol.BINARY_LEGACY_MASK {
+		// See https://github.com/apache/thrift/blob/master/doc/specs/thrift-binary-protocol.md#message
+		// The second, older encoding (aka non-strict) is:
+		// Binary protocol Message, old encoding, 9+ bytes:
+		// +--------+--------+--------+--------+--------+...+--------+--------+--------+--------+--------+--------+
+		// | name length                       | name                |00000mmm| seq id                            |
+		// +--------+--------+--------+--------+--------+...+--------+--------+--------+--------+--------+--------+
+
+		messageName = string(iter.readLarge(int(versionAndMessageType)))
+		messageType = protocol.TMessageType(iter.readByte())
+	} else {
+		messageType = protocol.TMessageType(versionAndMessageType & 0x0ff)
+
+		version := int64(int64(versionAndMessageType) & 0xffff0000)
+		if version != protocol.BINARY_VERSION_1 {
+			iter.ReportError("ReadMessageHeader", "unexpected version")
+			return protocol.MessageHeader{}
+		}
+
+		messageName = iter.ReadString()
 	}
-	messageName := iter.ReadString()
+
 	seqId := protocol.SeqId(iter.ReadInt32())
 	return protocol.MessageHeader{
 		MessageName: messageName,
